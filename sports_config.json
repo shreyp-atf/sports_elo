@@ -1,0 +1,22 @@
+{
+  "sports": [
+    {
+      "id": "pickleball",
+      "name": "Pickleball",
+      "emoji": "🏓",
+      "match_types": {
+        "singles": "data/pickleball_singles.json",
+        "doubles": "data/pickleball_doubles.json"
+      }
+    },
+    {
+      "id": "badminton",
+      "name": "Badminton",
+      "emoji": "🏸",
+      "match_types": {
+        "singles": "data/badminton_singles.json",
+        "doubles": "data/badminton_doubles.json"
+      }
+    }
+  ]
+}
