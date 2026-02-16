@@ -28,10 +28,10 @@ def _get_active_players_ffa(matches):
     return active
 
 
-def render_ratings_table(ratings, active_players, label="Rating"):
+def render_ratings_table(ratings, active_players, player_map, label="Rating"):
     """Render a sortable ELO ratings table."""
     data = [
-        (p, ratings[p]) for p in ratings if p in active_players
+        (player_map.get(p, f"#{p}"), ratings[p]) for p in ratings if p in active_players
     ]
     if not data:
         st.info("No rated players yet. Play some matches!")
@@ -43,9 +43,9 @@ def render_ratings_table(ratings, active_players, label="Rating"):
     st.dataframe(df.style.format({label: "{:.1f}"}), use_container_width=True)
 
 
-def render_elo_history_chart(history, active_players, key_prefix=""):
+def render_elo_history_chart(history, active_players, player_map, key_prefix=""):
     """Render a single-player ELO history line chart."""
-    graph_data = _build_graph_data(history, active_players)
+    graph_data = _build_graph_data(history, active_players, player_map)
     if not graph_data:
         return
 
@@ -90,7 +90,7 @@ def render_elo_history_chart(history, active_players, key_prefix=""):
     st.pyplot(fig)
 
 
-def _build_graph_data(history, active_players):
+def _build_graph_data(history, active_players, player_map):
     """Build interpolated graph data from ELO history."""
     all_match_nums = [
         mn for series in history.values() for mn, _ in series
@@ -101,34 +101,36 @@ def _build_graph_data(history, active_players):
     max_match_num = max(all_match_nums)
     graph_data = []
 
-    for player, series in history.items():
-        if player not in active_players or not series:
+    for player_id, series in history.items():
+        if player_id not in active_players or not series:
             continue
+
+        player_name = player_map.get(player_id, f"#{player_id}")
 
         for i in range(len(series)):
             match_num, rating = series[i]
             graph_data.append(
-                {"Player": player, "Match #": match_num, "Elo Rating": rating}
+                {"Player": player_name, "Match #": match_num, "Elo Rating": rating}
             )
             if i < len(series) - 1:
                 next_match_num, _ = series[i + 1]
                 for skipped in range(match_num + 1, next_match_num):
                     graph_data.append(
-                        {"Player": player, "Match #": skipped, "Elo Rating": rating}
+                        {"Player": player_name, "Match #": skipped, "Elo Rating": rating}
                     )
 
         last_match_num, last_rating = series[-1]
         if last_match_num < max_match_num:
             graph_data.append(
-                {"Player": player, "Match #": max_match_num, "Elo Rating": last_rating}
+                {"Player": player_name, "Match #": max_match_num, "Elo Rating": last_rating}
             )
 
     return graph_data
 
 
-def render_leaderboard(sport_data, sport_config):
+def render_leaderboard(sport_data, sport_config, player_map):
     """Main leaderboard page renderer."""
-    match_types = sport_config.get("match_types", {})
+    match_types = sport_config.get("match_types", [])
 
     for mtype in match_types:
         if mtype not in sport_data:
@@ -148,9 +150,10 @@ def render_leaderboard(sport_data, sport_config):
         else:
             active = set()
 
-        render_ratings_table(ratings, active, label=f"{label} Elo")
+        render_ratings_table(ratings, active, player_map, label=f"{label} Elo")
 
         st.subheader(f"🔍 {label} Elo History")
         render_elo_history_chart(
-            history, active, key_prefix=f"{sport_config['id']}_{mtype}"
+            history, active, player_map,
+            key_prefix=f"{sport_config['id']}_{mtype}",
         )

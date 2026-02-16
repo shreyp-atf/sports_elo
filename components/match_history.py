@@ -4,9 +4,9 @@ import streamlit as st
 import pandas as pd
 
 
-def render_match_history(sport_data, sport_config):
+def render_match_history(sport_data, sport_config, player_map):
     """Render match history tables for all match types in a sport."""
-    match_types = sport_config.get("match_types", {})
+    match_types = sport_config.get("match_types", [])
 
     for mtype in match_types:
         if mtype not in sport_data:
@@ -22,20 +22,27 @@ def render_match_history(sport_data, sport_config):
             continue
 
         if mtype == "singles":
-            df = pd.DataFrame(matches)
-            display_cols = ["date", "player1", "score1", "score2", "player2"]
-            available = [c for c in display_cols if c in df.columns]
-            st.dataframe(df[available][::-1].reset_index(drop=True), use_container_width=True)
+            rows = []
+            for m in matches:
+                rows.append({
+                    "Date": m.get("date", ""),
+                    "Player 1": m["player1_name"],
+                    "Score 1": m["score1"],
+                    "Score 2": m["score2"],
+                    "Player 2": m["player2_name"],
+                })
+            df = pd.DataFrame(rows)
+            st.dataframe(df[::-1].reset_index(drop=True), use_container_width=True)
 
         elif mtype == "doubles":
             rows = []
             for m in matches:
                 rows.append({
                     "Date": m.get("date", ""),
-                    "Team 1": " + ".join(m["team1"]),
+                    "Team 1": " + ".join(m["team1_names"]),
                     "Score 1": m["score1"],
                     "Score 2": m["score2"],
-                    "Team 2": " + ".join(m["team2"]),
+                    "Team 2": " + ".join(m["team2_names"]),
                 })
             df = pd.DataFrame(rows)
             st.dataframe(df[::-1].reset_index(drop=True), use_container_width=True)
@@ -46,7 +53,7 @@ def render_match_history(sport_data, sport_config):
                 results = m.get("results", [])
                 sorted_results = sorted(results, key=lambda r: r.get("rank", 99))
                 summary = ", ".join(
-                    f"#{r['rank']} {r['player']} ({r.get('score', '-')})"
+                    f"#{r['rank']} {r['player_name']} ({r.get('score', '-')})"
                     for r in sorted_results
                 )
                 rows.append({

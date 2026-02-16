@@ -15,7 +15,7 @@ from components.charts import apply_dark_style, apply_dark_legend
 # Shared stat computation
 # -----------------------------------------------------------------------
 
-def compute_singles_stats(matches, active_players):
+def compute_singles_stats(matches, active_players, player_map):
     """Compute per-player performance stats from singles matches."""
     stats = defaultdict(lambda: {
         "Wins": 0, "Losses": 0, "Games": 0,
@@ -44,10 +44,10 @@ def compute_singles_stats(matches, active_players):
             result = "W" if player == winner else "L"
             stats[player]["Streak History"].append(result)
 
-    return _process_stats(stats, active_players)
+    return _process_stats(stats, active_players, player_map)
 
 
-def compute_doubles_stats(matches, active_players):
+def compute_doubles_stats(matches, active_players, player_map):
     """Compute per-player performance stats from doubles matches."""
     stats = defaultdict(lambda: {
         "Wins": 0, "Losses": 0, "Games": 0,
@@ -76,7 +76,7 @@ def compute_doubles_stats(matches, active_players):
             stats[p]["Points Won"] += s2
             stats[p]["Points Lost"] += s1
 
-    return _process_stats(stats, active_players)
+    return _process_stats(stats, active_players, player_map)
 
 
 def _max_streak(seq, target):
@@ -90,10 +90,10 @@ def _max_streak(seq, target):
     return max_count
 
 
-def _process_stats(stats, active_players):
+def _process_stats(stats, active_players, player_map):
     processed = []
-    for player, data in stats.items():
-        if player not in active_players:
+    for player_id, data in stats.items():
+        if player_id not in active_players:
             continue
         games = data["Games"]
         wins = data["Wins"]
@@ -114,7 +114,8 @@ def _process_stats(stats, active_players):
             current_streak = f"{count}{last}"
 
         processed.append({
-            "Player": player,
+            "player_id": player_id,
+            "Player": player_map.get(player_id, f"#{player_id}"),
             "Matches": wins + losses,
             "Wins": wins,
             "Losses": losses,
@@ -139,7 +140,8 @@ def render_player_stats(processed_stats):
         st.info("No match data yet.")
         return
     df = pd.DataFrame(processed_stats)
-    df = df.sort_values("Wins", ascending=False).reset_index(drop=True)
+    display_cols = [c for c in df.columns if c != "player_id"]
+    df = df[display_cols].sort_values("Wins", ascending=False).reset_index(drop=True)
     st.dataframe(df, use_container_width=True)
 
 
@@ -147,27 +149,40 @@ def render_player_stats(processed_stats):
 # Player comparison tool (singles)
 # -----------------------------------------------------------------------
 
-def render_player_comparison(ratings, processed_stats, matches, active_players, key_prefix=""):
+def render_player_comparison(ratings, processed_stats, matches, active_players,
+                             player_map, key_prefix=""):
     """Radar chart comparing two players."""
     if len(active_players) < 2:
         st.info("Need at least 2 active players for comparison.")
         return
 
-    sorted_players = sorted(active_players)
+    sorted_ids = sorted(active_players, key=lambda pid: player_map.get(pid, ""))
+    labels = {pid: player_map.get(pid, f"#{pid}") for pid in sorted_ids}
 
     col1, col2 = st.columns(2)
     with col1:
-        p1 = st.selectbox("Player 1:", sorted_players, index=0, key=f"{key_prefix}_cmp1")
+        p1 = st.selectbox(
+            "Player 1:", sorted_ids, index=0,
+            format_func=lambda pid: labels[pid],
+            key=f"{key_prefix}_cmp1",
+        )
     with col2:
-        idx2 = min(1, len(sorted_players) - 1)
-        p2 = st.selectbox("Player 2:", sorted_players, index=idx2, key=f"{key_prefix}_cmp2")
+        idx2 = min(1, len(sorted_ids) - 1)
+        p2 = st.selectbox(
+            "Player 2:", sorted_ids, index=idx2,
+            format_func=lambda pid: labels[pid],
+            key=f"{key_prefix}_cmp2",
+        )
 
     if p1 == p2:
         st.warning("Select two different players.")
         return
 
-    p1_stats = next((s for s in processed_stats if s["Player"] == p1), None)
-    p2_stats = next((s for s in processed_stats if s["Player"] == p2), None)
+    p1_name = labels[p1]
+    p2_name = labels[p2]
+
+    p1_stats = next((s for s in processed_stats if s["player_id"] == p1), None)
+    p2_stats = next((s for s in processed_stats if s["player_id"] == p2), None)
 
     if not p1_stats or not p2_stats:
         st.info("One or both players have no stats yet.")
@@ -176,16 +191,16 @@ def render_player_comparison(ratings, processed_stats, matches, active_players, 
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col1:
-        st.markdown(f"### {p1}")
+        st.markdown(f"### {p1_name}")
         st.metric("ELO", f"{ratings.get(p1, 1000):.0f}")
         st.metric("Wins", p1_stats["Wins"])
         st.metric("Win %", f"{p1_stats['W/L %']:.1f}%")
 
     with col2:
-        _render_radar_chart(ratings, p1, p2, p1_stats, p2_stats)
+        _render_radar_chart(ratings, p1, p2, p1_name, p2_name, p1_stats, p2_stats)
 
     with col3:
-        st.markdown(f"### {p2}")
+        st.markdown(f"### {p2_name}")
         st.metric("ELO", f"{ratings.get(p2, 1000):.0f}")
         st.metric("Wins", p2_stats["Wins"])
         st.metric("Win %", f"{p2_stats['W/L %']:.1f}%")
@@ -202,14 +217,14 @@ def render_player_comparison(ratings, processed_stats, matches, active_players, 
                       (m["player2"] == p1 and m["score2"] > m["score1"]))
         p2_wins = len(h2h) - p1_wins
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"{p1} Wins", p1_wins)
+        c1.metric(f"{p1_name} Wins", p1_wins)
         c2.metric("Total Matches", len(h2h))
-        c3.metric(f"{p2} Wins", p2_wins)
+        c3.metric(f"{p2_name} Wins", p2_wins)
     else:
         st.info("These players haven't faced each other yet!")
 
 
-def _render_radar_chart(ratings, p1, p2, p1_stats, p2_stats):
+def _render_radar_chart(ratings, p1, p2, p1_name, p2_name, p1_stats, p2_stats):
     categories = ["ELO\n(norm)", "Win Rate", "Avg Pts\nWon", "Longest\nWin Streak", "Matches\nPlayed"]
 
     all_ratings = list(ratings.values())
@@ -217,9 +232,9 @@ def _render_radar_chart(ratings, p1, p2, p1_stats, p2_stats):
     min_elo = min(all_ratings) if all_ratings else 900
     elo_range = max_elo - min_elo or 1
 
-    def vals(player, pstats):
+    def vals(player_id, pstats):
         return [
-            ((ratings.get(player, 1000) - min_elo) / elo_range) * 100,
+            ((ratings.get(player_id, 1000) - min_elo) / elo_range) * 100,
             pstats["W/L %"],
             (pstats["Avg Points Won"] / 11) * 100,
             min(pstats["Longest Win Streak"] / 10 * 100, 100),
@@ -235,9 +250,9 @@ def _render_radar_chart(ratings, p1, p2, p1_stats, p2_stats):
     angles += angles[:1]
 
     fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(projection="polar"))
-    ax.plot(angles, p1_vals, "o-", linewidth=2, label=p1, color="#2196F3")
+    ax.plot(angles, p1_vals, "o-", linewidth=2, label=p1_name, color="#2196F3")
     ax.fill(angles, p1_vals, alpha=0.25, color="#2196F3")
-    ax.plot(angles, p2_vals, "o-", linewidth=2, label=p2, color="#FF5722")
+    ax.plot(angles, p2_vals, "o-", linewidth=2, label=p2_name, color="#FF5722")
     ax.fill(angles, p2_vals, alpha=0.25, color="#FF5722")
 
     ax.set_xticks(angles[:-1])
@@ -247,7 +262,6 @@ def _render_radar_chart(ratings, p1, p2, p1_stats, p2_stats):
     ax.set_yticklabels(["25", "50", "75", "100"], size=8)
     ax.grid(True)
 
-    # Dark mode
     ax.set_facecolor("#1e1e1e")
     fig.patch.set_facecolor("#1e1e1e")
     ax.tick_params(colors="white")
@@ -268,7 +282,7 @@ def _render_radar_chart(ratings, p1, p2, p1_stats, p2_stats):
 # ELO distribution
 # -----------------------------------------------------------------------
 
-def render_elo_distribution(ratings, active_players):
+def render_elo_distribution(ratings, active_players, player_map):
     """Histogram of ELO ratings with tier colouring."""
     active_ratings = [ratings[p] for p in active_players if p in ratings]
     if not active_ratings:
@@ -312,7 +326,7 @@ def render_elo_distribution(ratings, active_players):
 # Top players progression
 # -----------------------------------------------------------------------
 
-def render_top_players_progression(ratings, history, active_players, n=5):
+def render_top_players_progression(ratings, history, active_players, player_map, n=5):
     """Line chart showing ELO journey of top-N players."""
     if not active_players:
         return
@@ -327,13 +341,14 @@ def render_top_players_progression(ratings, history, active_players, n=5):
     fig, ax = plt.subplots(figsize=(12, 6))
     colors = plt.cm.tab10(np.linspace(0, 1, top_n))
 
-    for idx, player in enumerate(top_players):
-        ph = history.get(player, [])
+    for idx, player_id in enumerate(top_players):
+        ph = history.get(player_id, [])
         if len(ph) > 1:
             match_nums = [m for m, _ in ph]
             elos = [r for _, r in ph]
             ax.plot(match_nums, elos, marker="o", linewidth=2.5,
-                    label=player, color=colors[idx], alpha=0.8)
+                    label=player_map.get(player_id, f"#{player_id}"),
+                    color=colors[idx], alpha=0.8)
 
     ax.set_xlabel("Match Number", fontsize=12, fontweight="bold")
     ax.set_ylabel("ELO Rating", fontsize=12, fontweight="bold")
@@ -347,18 +362,18 @@ def render_top_players_progression(ratings, history, active_players, n=5):
 # Recent form
 # -----------------------------------------------------------------------
 
-def render_recent_form(matches, active_players, min_matches=10):
+def render_recent_form(matches, active_players, player_map, min_matches=10):
     """Table showing recent form based on last 10 matches."""
     form_data = []
-    for player in active_players:
-        pm = [m for m in matches if m["player1"] == player or m["player2"] == player]
+    for player_id in active_players:
+        pm = [m for m in matches if m["player1"] == player_id or m["player2"] == player_id]
         if len(pm) < min_matches:
             continue
         last = pm[-10:]
         wins = sum(
             1 for m in last
-            if (m["player1"] == player and m["score1"] > m["score2"])
-            or (m["player2"] == player and m["score2"] > m["score1"])
+            if (m["player1"] == player_id and m["score1"] > m["score2"])
+            or (m["player2"] == player_id and m["score2"] > m["score1"])
         )
         wr = (wins / len(last)) * 100
         if wr >= 70:
@@ -370,7 +385,7 @@ def render_recent_form(matches, active_players, min_matches=10):
         else:
             form = "🧊 Cold"
         form_data.append({
-            "Player": player,
+            "Player": player_map.get(player_id, f"#{player_id}"),
             "Last 10 W-L": f"{wins}-{len(last) - wins}",
             "Win Rate %": round(wr, 1),
             "Form": form,
@@ -420,7 +435,7 @@ def render_match_competitiveness(matches):
 # Activity chart
 # -----------------------------------------------------------------------
 
-def render_activity(matches, active_players):
+def render_activity(matches, active_players, player_map):
     """Match activity over time + most active players."""
     dates = []
     for m in matches:
@@ -452,41 +467,42 @@ def render_activity(matches, active_players):
     with col2:
         st.markdown("### Activity Stats")
         player_counts = {}
-        for player in active_players:
+        for player_id in active_players:
             count = sum(
                 1 for m in matches
-                if m.get("player1") == player or m.get("player2") == player
+                if m.get("player1") == player_id or m.get("player2") == player_id
             )
-            player_counts[player] = count
+            player_counts[player_id] = count
         top_active = sorted(player_counts.items(), key=lambda x: x[1], reverse=True)[:4]
         st.markdown("**Most Active Players:**")
-        for i, (player, count) in enumerate(top_active, 1):
-            st.markdown(f"{i}. **{player}**: {count} matches")
+        for i, (player_id, count) in enumerate(top_active, 1):
+            st.markdown(f"{i}. **{player_map.get(player_id, f'#{player_id}')}**: {count} matches")
 
 
 # -----------------------------------------------------------------------
 # Performance metrics (ELO-based)
 # -----------------------------------------------------------------------
 
-def render_performance_metrics(ratings, history, processed_stats, matches, active_players):
+def render_performance_metrics(ratings, history, processed_stats, matches,
+                               active_players, player_map):
     """Advanced performance metrics table + peak performance chart."""
     metrics = []
-    for player in active_players:
-        pstat = next((s for s in processed_stats if s["Player"] == player), None)
+    for player_id in active_players:
+        pstat = next((s for s in processed_stats if s["player_id"] == player_id), None)
         if not pstat:
             continue
-        ph = history.get(player, [])
+        ph = history.get(player_id, [])
         if len(ph) < 2:
             continue
 
         elos = [r for _, r in ph[1:]]
-        current = ratings.get(player, 1000)
+        current = ratings.get(player_id, 1000)
         peak = max(elos)
         elo_std = np.std(elos) if len(elos) > 1 else 0
         changes = [elos[i] - elos[i - 1] for i in range(1, len(elos))]
 
         metrics.append({
-            "Player": player,
+            "Player": player_map.get(player_id, f"#{player_id}"),
             "Current ELO": round(current, 1),
             "Peak ELO": round(peak, 1),
             "ELO vs Peak": round(current - peak, 1),
@@ -530,7 +546,7 @@ def render_performance_metrics(ratings, history, processed_stats, matches, activ
 # Doubles partnership
 # -----------------------------------------------------------------------
 
-def render_doubles_partnership(doubles_matches, doubles_ratings):
+def render_doubles_partnership(doubles_matches, doubles_ratings, player_map):
     """Best partner and matchup records for doubles."""
     if not doubles_matches:
         st.info("No doubles matches yet.")
@@ -541,6 +557,7 @@ def render_doubles_partnership(doubles_matches, doubles_ratings):
 
     for match in doubles_matches:
         t1, t2 = match["team1"], match["team2"]
+        t1_names, t2_names = match["team1_names"], match["team2_names"]
         s1, s2 = match["score1"], match["score2"]
         wt = t1 if s1 > s2 else t2
 
@@ -552,8 +569,8 @@ def render_doubles_partnership(doubles_matches, doubles_ratings):
                         if team == wt:
                             partner_stats[p1][p2]["wins"] += 1
 
-        t1k = " & ".join(sorted(t1))
-        t2k = " & ".join(sorted(t2))
+        t1k = " & ".join(sorted(t1_names))
+        t2k = " & ".join(sorted(t2_names))
         if s1 > s2:
             matchup_stats[t1k][t2k]["wins"] += 1
             matchup_stats[t1k][t2k]["total"] += 1
@@ -568,14 +585,14 @@ def render_doubles_partnership(doubles_matches, doubles_ratings):
     # Best partner table
     st.subheader("Best Doubles Partner (by Win %)")
     bp_data = []
-    for player, partners in partner_stats.items():
+    for player_id, partners in partner_stats.items():
         best = max(partners.items(), key=lambda x: x[1]["wins"], default=(None, {"wins": 0, "matches": 0}))
-        bp, bstats = best
+        bp_id, bstats = best
         total = bstats["matches"]
         wins = bstats["wins"]
         bp_data.append({
-            "Player": player,
-            "Best Partner": bp,
+            "Player": player_map.get(player_id, f"#{player_id}"),
+            "Best Partner": player_map.get(bp_id, f"#{bp_id}") if bp_id is not None else "-",
             "Matches Together": total,
             "Wins Together": wins,
             "Win %": round(100 * wins / total, 1) if total > 0 else 0,
@@ -602,9 +619,9 @@ def render_doubles_partnership(doubles_matches, doubles_ratings):
 # Main analytics page renderer
 # -----------------------------------------------------------------------
 
-def render_analytics(sport_data, sport_config):
+def render_analytics(sport_data, sport_config, player_map):
     """Main analytics page."""
-    match_types = sport_config.get("match_types", {})
+    match_types = sport_config.get("match_types", [])
 
     for mtype in match_types:
         if mtype not in sport_data:
@@ -618,7 +635,7 @@ def render_analytics(sport_data, sport_config):
             for m in matches:
                 active.update([m["player1"], m["player2"]])
 
-            stats = compute_singles_stats(matches, active)
+            stats = compute_singles_stats(matches, active, player_map)
 
             st.header(f"📊 {label} Player Stats")
             render_player_stats(stats)
@@ -626,40 +643,40 @@ def render_analytics(sport_data, sport_config):
             if len(active) >= 2:
                 st.header(f"🔬 {label} Player Comparison")
                 render_player_comparison(
-                    ratings, stats, matches, active,
+                    ratings, stats, matches, active, player_map,
                     key_prefix=f"{sport_config['id']}_{mtype}",
                 )
 
                 st.header(f"🎯 {label} ELO Distribution")
-                render_elo_distribution(ratings, active)
+                render_elo_distribution(ratings, active, player_map)
 
-                st.header(f"🏅 Top Players Progression")
-                render_top_players_progression(ratings, history, active)
+                st.header("🏅 Top Players Progression")
+                render_top_players_progression(ratings, history, active, player_map)
 
             st.header(f"🔥 {label} Recent Form")
-            render_recent_form(matches, active)
+            render_recent_form(matches, active, player_map)
 
             st.header(f"⚔️ {label} Match Competitiveness")
             render_match_competitiveness(matches)
 
             st.header(f"📅 {label} Activity")
-            render_activity(matches, active)
+            render_activity(matches, active, player_map)
 
             st.header(f"🎯 {label} Performance Metrics")
-            render_performance_metrics(ratings, history, stats, matches, active)
+            render_performance_metrics(ratings, history, stats, matches, active, player_map)
 
         elif mtype == "doubles":
             active = set()
             for m in matches:
                 active.update(m["team1"] + m["team2"])
 
-            stats = compute_doubles_stats(matches, active)
+            stats = compute_doubles_stats(matches, active, player_map)
 
             st.header(f"📊 {label} Player Stats")
             render_player_stats(stats)
 
             st.header(f"🤝 {label} Partnership & Matchups")
-            render_doubles_partnership(matches, ratings)
+            render_doubles_partnership(matches, ratings, player_map)
 
         elif mtype == "ffa":
             st.header(f"📊 {label} Stats")

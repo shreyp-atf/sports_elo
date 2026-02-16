@@ -1,7 +1,7 @@
 """Sidebar rendering: sport selector, page navigation, club stats."""
 
 import streamlit as st
-from elo import load_sports_config, load_players
+from data_utils import load_sports_config
 
 
 def render_sport_selector():
@@ -34,17 +34,16 @@ def render_page_selector():
     return st.sidebar.radio("Page", pages, key="page_selector")
 
 
-def render_club_stats(sport_config, sport_data):
+def render_club_stats(sport_config, sport_data, player_map):
     """Render sidebar club stats for the selected sport."""
     st.sidebar.header(f"📊 {sport_config['name']} Stats")
 
-    players = load_players()
-    match_types = sport_config.get("match_types", {})
+    match_types = sport_config.get("match_types", [])
 
     total_matches = 0
     active_player_set = set()
 
-    for mtype, data_file in match_types.items():
+    for mtype in match_types:
         matches = sport_data.get(mtype, (None, None, []))[2]
         total_matches += len(matches)
 
@@ -60,7 +59,7 @@ def render_club_stats(sport_config, sport_data):
                     active_player_set.add(r["player"])
 
     st.sidebar.markdown(f"""
-- 🧑 **Club Members:** {len(players)}
+- 🧑 **Club Members:** {len(player_map)}
 - 🏃 **Active Players:** {len(active_player_set)}
 - 🎮 **Matches Played:** {total_matches}
 """)

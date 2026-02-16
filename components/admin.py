@@ -1,16 +1,13 @@
-"""Admin page: login gate and player registration panel."""
+"""Admin page: login gate, player registration, and match score entry."""
 
 import streamlit as st
-from elo import (
+from data_utils import (
     add_player,
     load_players,
     load_sports_config,
     add_singles_match,
     add_doubles_match,
 )
-
-ADMIN_USER = "atf123"
-ADMIN_PASS = "1771"
 
 
 def render_admin_login():
@@ -23,7 +20,7 @@ def render_admin_login():
         submitted = st.form_submit_button("Log in")
 
     if submitted:
-        if user == ADMIN_USER and password == ADMIN_PASS:
+        if user == st.secrets["admin_user"] and password == st.secrets["admin_pass"]:
             st.session_state["admin_authenticated"] = True
             st.rerun()
         else:
@@ -31,7 +28,7 @@ def render_admin_login():
 
 
 def render_admin_panel():
-    """Authenticated admin UI: register players."""
+    """Authenticated admin UI: register players and record matches."""
     st.header("Admin Panel")
     st.caption("(All players start at 1000 Elo)")
 
@@ -49,16 +46,18 @@ def render_admin_panel():
         name = name.strip()
         if not name:
             st.warning("Player name cannot be empty.")
-        elif add_player(name):
-            st.success(f"**{name}** has been registered.")
         else:
-            st.warning(f"**{name}** is already registered.")
+            try:
+                new_id = add_player(name)
+                st.success(f"**{name}** has been registered (ID {new_id}).")
+            except Exception:
+                st.error("Failed to register player. Please try again.")
 
     st.subheader("Current Players")
-    players = sorted(load_players())
-    if players:
-        for p in players:
-            st.write(f"- {p}")
+    player_map = load_players()
+    if player_map:
+        for pid, pname in sorted(player_map.items(), key=lambda x: x[1]):
+            st.write(f"- {pname} (#{pid})")
     else:
         st.info("No players registered yet.")
 
@@ -67,14 +66,14 @@ def render_admin_panel():
     # ------------------------------------------------------------------
     # Match score entry
     # ------------------------------------------------------------------
-    render_match_entry(players)
+    render_match_entry(player_map)
 
 
-def render_match_entry(players):
+def render_match_entry(player_map):
     """Render the match score entry form."""
     st.subheader("Record Match Score")
 
-    if len(players) < 2:
+    if len(player_map) < 2:
         st.info("Register at least 2 players before recording matches.")
         return
 
@@ -92,7 +91,7 @@ def render_match_entry(players):
     )
 
     sport = next(s for s in sports if s["id"] == sport_id)
-    match_types = list(sport.get("match_types", {}).keys())
+    match_types = sport.get("match_types", [])
 
     if not match_types:
         st.warning("This sport has no match types configured.")
@@ -105,75 +104,117 @@ def render_match_entry(players):
         key="match_type",
     )
 
-    data_file = sport["match_types"][match_type]
-
     if match_type == "singles":
-        _render_singles_form(players, data_file, sport["name"])
+        _render_singles_form(player_map, sport_id, sport["name"])
     elif match_type == "doubles":
-        _render_doubles_form(players, data_file, sport["name"])
+        _render_doubles_form(player_map, sport_id, sport["name"])
     else:
         st.info(f"Score entry for **{match_type}** matches is not yet supported.")
 
 
-def _render_singles_form(players, data_file, sport_name):
+def _player_options(player_map):
+    """Return sorted (id, name) pairs for select-box options."""
+    return sorted(player_map.items(), key=lambda x: x[1])
+
+
+def _render_singles_form(player_map, sport_id, sport_name):
     """Form for recording a singles match."""
+    opts = _player_options(player_map)
+    player_ids = [pid for pid, _ in opts]
+    player_labels = {pid: name for pid, name in opts}
+
     with st.form("singles_match_form"):
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**Player 1**")
-            p1 = st.selectbox("Player 1", options=players, key="singles_p1")
+            p1 = st.selectbox(
+                "Player 1", options=player_ids,
+                format_func=lambda pid: player_labels[pid],
+                key="singles_p1",
+            )
             s1 = st.number_input("Score", min_value=0, step=1, key="singles_s1")
         with col2:
             st.markdown("**Player 2**")
-            p2 = st.selectbox("Player 2", options=players, key="singles_p2")
+            p2 = st.selectbox(
+                "Player 2", options=player_ids,
+                format_func=lambda pid: player_labels[pid],
+                key="singles_p2",
+            )
             s2 = st.number_input("Score", min_value=0, step=1, key="singles_s2")
 
         submitted = st.form_submit_button("Submit Match")
 
     if submitted:
-        err = add_singles_match(data_file, p1, p2, int(s1), int(s2))
-        if err:
-            st.error(err)
-        else:
-            st.success(
-                f"Recorded {sport_name} singles: **{p1}** {int(s1)} – {int(s2)} **{p2}**"
-            )
+        try:
+            err = add_singles_match(sport_id, p1, p2, int(s1), int(s2))
+            if err:
+                st.error(err)
+            else:
+                st.success(
+                    f"Recorded {sport_name} singles: "
+                    f"**{player_labels[p1]}** {int(s1)} – {int(s2)} **{player_labels[p2]}**"
+                )
+        except Exception:
+            st.error("Failed to record match. Please try again.")
 
 
-def _render_doubles_form(players, data_file, sport_name):
+def _render_doubles_form(player_map, sport_id, sport_name):
     """Form for recording a doubles match."""
+    opts = _player_options(player_map)
+    player_ids = [pid for pid, _ in opts]
+    player_labels = {pid: name for pid, name in opts}
+
     with st.form("doubles_match_form"):
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**Team 1**")
-            t1_p1 = st.selectbox("Team 1 – Player A", options=players, key="doubles_t1p1")
-            t1_p2 = st.selectbox("Team 1 – Player B", options=players, key="doubles_t1p2")
+            t1_p1 = st.selectbox(
+                "Team 1 – Player A", options=player_ids,
+                format_func=lambda pid: player_labels[pid],
+                key="doubles_t1p1",
+            )
+            t1_p2 = st.selectbox(
+                "Team 1 – Player B", options=player_ids,
+                format_func=lambda pid: player_labels[pid],
+                key="doubles_t1p2",
+            )
             s1 = st.number_input("Team 1 Score", min_value=0, step=1, key="doubles_s1")
         with col2:
             st.markdown("**Team 2**")
-            t2_p1 = st.selectbox("Team 2 – Player A", options=players, key="doubles_t2p1")
-            t2_p2 = st.selectbox("Team 2 – Player B", options=players, key="doubles_t2p2")
+            t2_p1 = st.selectbox(
+                "Team 2 – Player A", options=player_ids,
+                format_func=lambda pid: player_labels[pid],
+                key="doubles_t2p1",
+            )
+            t2_p2 = st.selectbox(
+                "Team 2 – Player B", options=player_ids,
+                format_func=lambda pid: player_labels[pid],
+                key="doubles_t2p2",
+            )
             s2 = st.number_input("Team 2 Score", min_value=0, step=1, key="doubles_s2")
 
         submitted = st.form_submit_button("Submit Match")
 
     if submitted:
-        team1 = [t1_p1, t1_p2]
-        team2 = [t2_p1, t2_p2]
-
-        # Validate: no duplicate players across or within teams
-        all_selected = team1 + team2
+        all_selected = [t1_p1, t1_p2, t2_p1, t2_p2]
         if len(set(all_selected)) != 4:
             st.error("All four players must be different.")
         else:
-            err = add_doubles_match(data_file, team1, team2, int(s1), int(s2))
-            if err:
-                st.error(err)
-            else:
-                st.success(
-                    f"Recorded {sport_name} doubles: "
-                    f"**{t1_p1} & {t1_p2}** {int(s1)} – {int(s2)} **{t2_p1} & {t2_p2}**"
+            try:
+                err = add_doubles_match(
+                    sport_id, t1_p1, t1_p2, t2_p1, t2_p2, int(s1), int(s2)
                 )
+                if err:
+                    st.error(err)
+                else:
+                    st.success(
+                        f"Recorded {sport_name} doubles: "
+                        f"**{player_labels[t1_p1]} & {player_labels[t1_p2]}** "
+                        f"{int(s1)} – {int(s2)} "
+                        f"**{player_labels[t2_p1]} & {player_labels[t2_p2]}**"
+                    )
+            except Exception:
+                st.error("Failed to record match. Please try again.")
 
 
 def render_admin_page():

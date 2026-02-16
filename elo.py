@@ -1,14 +1,10 @@
-import json
-import os
+"""Pure ELO math: rating computations for singles, doubles, and FFA matches."""
+
 from collections import defaultdict
-from datetime import datetime
 from math import pow
 
 DEFAULT_RATING = 1000
 K = 32
-
-PLAYERS_FILE = "data/players.json"
-SPORTS_CONFIG_FILE = "sports_config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -26,98 +22,6 @@ def update_elo(ra, rb, result_a):
     return ra_new, rb_new
 
 
-def today():
-    return datetime.today().strftime("%Y-%m-%d")
-
-
-# ---------------------------------------------------------------------------
-# JSON I/O helpers
-# ---------------------------------------------------------------------------
-
-def _load_json(path):
-    if not os.path.exists(path):
-        return [] if path.endswith(".json") else {}
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-def _save_json(path, data):
-    dir_name = os.path.dirname(path)
-    if dir_name:
-        os.makedirs(dir_name, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-# ---------------------------------------------------------------------------
-# Config & player loading
-# ---------------------------------------------------------------------------
-
-def load_sports_config():
-    """Load the sports configuration file."""
-    return _load_json(SPORTS_CONFIG_FILE).get("sports", [])
-
-
-def get_sport_config(sport_id):
-    """Get config for a single sport by its id."""
-    for sport in load_sports_config():
-        if sport["id"] == sport_id:
-            return sport
-    return None
-
-
-def load_players():
-    """Load the central player list from data/players.json."""
-    data = _load_json(PLAYERS_FILE)
-    if isinstance(data, dict):
-        return set(data.get("players", []))
-    return set()
-
-
-def save_players(players):
-    """Save the player list to data/players.json."""
-    _save_json(PLAYERS_FILE, {"players": sorted(players)})
-
-
-def add_player(name):
-    """Add a new player to the central registry. Returns True if added, False if already exists."""
-    players = load_players()
-    if name in players:
-        return False
-    players.add(name)
-    save_players(players)
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Match data loading
-# ---------------------------------------------------------------------------
-
-def load_matches(data_file):
-    """Load matches from a sport-specific data file."""
-    return _load_json(data_file)
-
-
-def save_matches(data_file, matches):
-    """Save matches to a sport-specific data file."""
-    _save_json(data_file, matches)
-
-
-def load_sport_matches(sport_id):
-    """Load all match data for a sport, keyed by match type.
-
-    Returns dict like:
-        {"singles": [...], "doubles": [...]}
-    """
-    config = get_sport_config(sport_id)
-    if not config:
-        return {}
-    result = {}
-    for match_type, data_file in config.get("match_types", {}).items():
-        result[match_type] = load_matches(data_file)
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Singles ELO computation
 # ---------------------------------------------------------------------------
@@ -127,12 +31,13 @@ def compute_singles_ratings(matches, players=None):
 
     Args:
         matches: list of {date, player1, player2, score1, score2}
-        players: optional set of player names to seed with default ratings
+                 player1/player2 are player IDs (int).
+        players: optional set of player IDs to seed with default ratings
 
     Returns:
         (ratings, history, matches)
-        - ratings: dict player -> current rating
-        - history: dict player -> list of (match_number, rating)
+        - ratings: dict player_id -> current rating
+        - history: dict player_id -> list of (match_number, rating)
         - matches: the input match list (passthrough for convenience)
     """
     if players is None:
@@ -177,11 +82,13 @@ def compute_doubles_ratings(matches, players=None):
     """Compute ELO ratings and history from a list of doubles matches.
 
     Args:
-        matches: list of {date, team1: [p, p], team2: [p, p], score1, score2}
-        players: optional set of player names to seed with default ratings
+        matches: list of {date, team1: [id, id], team2: [id, id], score1, score2}
+                 team members are player IDs (int).
+        players: optional set of player IDs to seed with default ratings
 
     Returns:
         (ratings, history, matches)
+        Ratings and history are keyed by player ID.
     """
     if players is None:
         players = set()
@@ -238,10 +145,12 @@ def compute_ffa_ratings(matches, players=None):
 
     Args:
         matches: list of {date, results: [{player, score, rank}, ...]}
-        players: optional set of player names to seed with default ratings
+                 player values are player IDs (int).
+        players: optional set of player IDs to seed with default ratings
 
     Returns:
         (ratings, history, matches)
+        Ratings and history are keyed by player ID.
     """
     if players is None:
         players = set()
@@ -306,94 +215,3 @@ MATCH_TYPE_COMPUTERS = {
     "doubles": compute_doubles_ratings,
     "ffa": compute_ffa_ratings,
 }
-
-
-def compute_ratings_for_sport(sport_id):
-    """Compute ratings for all match types in a sport.
-
-    Returns dict keyed by match_type:
-        {
-            "singles": (ratings, history, matches),
-            "doubles": (ratings, history, matches),
-        }
-    """
-    config = get_sport_config(sport_id)
-    if not config:
-        return {}
-
-    players = load_players()
-    all_matches = load_sport_matches(sport_id)
-    results = {}
-
-    for match_type, matches in all_matches.items():
-        compute_fn = MATCH_TYPE_COMPUTERS.get(match_type)
-        if compute_fn:
-            results[match_type] = compute_fn(matches, players)
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Match entry helpers
-# ---------------------------------------------------------------------------
-
-def add_singles_match(data_file, player1, player2, score1, score2):
-    """Add a singles match to a data file."""
-    if player1 == player2:
-        return "Players must be different."
-    if score1 == score2:
-        return "No ties allowed."
-
-    match = {
-        "date": today(),
-        "player1": player1,
-        "player2": player2,
-        "score1": score1,
-        "score2": score2,
-    }
-
-    existing = load_matches(data_file)
-    existing.append(match)
-    save_matches(data_file, existing)
-    return None
-
-
-def add_doubles_match(data_file, team1, team2, score1, score2):
-    """Add a doubles match to a data file."""
-    if set(team1) & set(team2):
-        return "Teams cannot share players."
-    if score1 == score2:
-        return "No ties allowed."
-
-    match = {
-        "date": today(),
-        "team1": team1,
-        "team2": team2,
-        "score1": score1,
-        "score2": score2,
-    }
-
-    existing = load_matches(data_file)
-    existing.append(match)
-    save_matches(data_file, existing)
-    return None
-
-
-def add_ffa_match(data_file, results):
-    """Add a free-for-all match to a data file.
-
-    Args:
-        results: list of {player, score, rank}
-    """
-    if len(results) < 2:
-        return "Need at least 2 players."
-
-    match = {
-        "date": today(),
-        "results": results,
-    }
-
-    existing = load_matches(data_file)
-    existing.append(match)
-    save_matches(data_file, existing)
-    return None
